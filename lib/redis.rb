@@ -182,8 +182,8 @@ class Redis
     call_command(argv)
   end
 
-  def call_command(argv)
-    @logger.debug { argv.inspect } if @logger
+  def call_command(command)
+    @logger.debug { command.inspect } if @logger
 
     # this wrapper to raw_call_command handle reconnection on socket
     # error. We try to reconnect just one time, otherwise let the error
@@ -191,68 +191,78 @@ class Redis
     connect_to_server if !@sock
 
     begin
-      raw_call_command(argv.dup)
+      raw_call_command(command.dup)
     rescue Errno::ECONNRESET, Errno::EPIPE, Errno::ECONNABORTED
       @sock.close rescue nil
       @sock = nil
       connect_to_server
-      raw_call_command(argv.dup)
+      raw_call_command(command.dup)
     end
   end
 
-  def raw_call_command(argvp)
-    pipeline = argvp[0].is_a?(Array)
+  def raw_call_command(args)
+    pipeline = args.first.is_a?(Array)
 
     unless pipeline
-      argvv = [argvp]
+      command = [args]
     else
-      argvv = argvp
+      command = args
     end
 
-    if MULTI_BULK_COMMANDS[argvv.flatten[0].to_s]
-      # TODO improve this code
-      argvp   = argvv.flatten
-      values  = argvp.pop.to_a.flatten
-      argvp   = values.unshift(argvp[0])
-      command = ["*#{argvp.size}"]
-      argvp.each do |v|
-        v = v.to_s
-        command << "$#{get_size(v)}"
-        command << v
-      end
-      command = command.map {|cmd| "#{cmd}\r\n"}.join
-    else
-      command = ""
-      argvv.each do |argv|
-        bulk = nil
-        argv[0] = argv[0].to_s.downcase
-        argv[0] = ALIASES[argv[0]] if ALIASES[argv[0]]
-        raise "#{argv[0]} command is disabled" if DISABLED_COMMANDS[argv[0]]
-        if BULK_COMMANDS[argv[0]] and argv.length > 1
-          bulk = argv[-1].to_s
-          argv[-1] = get_size(bulk)
-        end
-        command << "#{argv.join(' ')}\r\n"
-        command << "#{bulk}\r\n" if bulk
-      end
-    end
+    cmd = command.flatten.first.to_s
     
+    if MULTI_BULK_COMMANDS[cmd]
+      raw_command = build_raw_multi_bulk_command(command)
+    else
+      raw_command = build_raw_command(command)
+    end
+
     results = maybe_lock do
       begin
-        set_socket_timeout(@sock, 0) if requires_timeout_reset?(argvv.flatten[0].to_s)
-        process_command(command, argvv)
+        set_socket_timeout(@sock, 0) if requires_timeout_reset?(cmd)
+        process_command(raw_command, command)
       ensure
-        set_socket_timeout(@sock, @timeout) if requires_timeout_reset?(argvv.flatten[0].to_s)
+        set_socket_timeout(@sock, @timeout) if requires_timeout_reset?(cmd)
       end
     end
     
     return pipeline ? results : results[0]
   end
 
-  def process_command(command, argvv)
+  def build_raw_multi_bulk_command(commands)
+    commands = commands.flatten
+    values  = commands.pop.to_a.flatten
+    commands   = values.unshift(commands.first)
+    raw_commands = ["*#{commands.size}"]
+    commands.each do |cmd|
+      cmd = cmd.to_s
+      raw_commands << "$#{get_size(cmd)}"
+      raw_commands << cmd
+    end
+    raw_commands.map {|cmd| "#{cmd}\r\n"}.join
+  end
+  
+  def build_raw_command(command)
+    raw_command = ""
+    command.each do |argv|
+      bulk = nil
+      argv[0] = argv[0].to_s.downcase
+      argv[0] = ALIASES[argv[0]] if ALIASES[argv[0]]
+      raise "#{argv[0]} command is disabled" if DISABLED_COMMANDS[argv[0]]
+      if BULK_COMMANDS[argv[0]] and argv.length > 1
+        bulk = argv[-1].to_s
+        argv[-1] = get_size(bulk)
+      end
+      raw_command << "#{argv.join(' ')}\r\n"
+      raw_command << "#{bulk}\r\n" if bulk
+    end
+    raw_command
+  end
+  
+  def process_command(command, args)
     @sock.write(command)
-    argvv.map do |argv|
-      processor = REPLY_PROCESSOR[argv[0]]
+    args.map do |arg|
+      processor = REPLY_PROCESSOR[arg[0]]
       processor ? processor.call(read_reply) : read_reply
     end
   end

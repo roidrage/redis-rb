@@ -576,7 +576,15 @@ describe "redis" do
   it "should raise exception when manually try to change the database" do
     lambda { @r.select(0) }.should raise_error
   end
-  #
+
+  it "should raise an error when trying to run a disabled command" do
+    ["monitor", "sync"].each do |cmd|
+      lambda {
+        @r.send(cmd)
+      }.should raise_error
+    end
+  end
+  
   it "should be able to provide the last save time (LASTSAVE)" do
     savetime = @r.lastsave
     Time.at(savetime).class.should == Time
