@@ -236,20 +236,25 @@ class Redis
         command << "#{bulk}\r\n" if bulk
       end
     end
-    results = maybe_lock { process_command(command, argvv) }
+    
+    results = maybe_lock do
+      begin
+        set_socket_timeout(@sock, 0) if requires_timeout_reset?(argvv.flatten[0].to_s)
+        process_command(command, argvv)
+      ensure
+        set_socket_timeout(@sock, @timeout) if requires_timeout_reset?(argvv.flatten[0].to_s)
+      end
+    end
     
     return pipeline ? results : results[0]
   end
 
   def process_command(command, argvv)
-    set_socket_timeout(@sock, 0) if requires_timeout_reset?(command)
     @sock.write(command)
     argvv.map do |argv|
       processor = REPLY_PROCESSOR[argv[0]]
       processor ? processor.call(read_reply) : read_reply
     end
-  ensure
-    set_socket_timeout(@sock, @timeout) if requires_timeout_reset?(command)
   end
   
   def maybe_lock(&block)
@@ -367,13 +372,9 @@ class Redis
 
   private
     def requires_timeout_reset?(command)
-      blocking?(command) && @timeout
+      BLOCKING_COMMANDS[command] && @timeout
     end
     
-    def blocking?(command)
-      command.match(/^(#{BLOCKING_COMMANDS.keys.join("|")})/)
-    end
-  
     def get_size(string)
       string.respond_to?(:bytesize) ? string.bytesize : string.size
     end
