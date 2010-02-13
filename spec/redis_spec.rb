@@ -668,7 +668,7 @@ describe "redis" do
   it "should be able to block on the tail of a list (BLPOP)" do
     @r.lpush('blocking_queue', 'message')
     @r.lpush('blocking_queue', 'another_message')
-    pid = Kernel.fork do
+    t = Thread.new do
       r = Redis.new(:db => 15)
       sleep 0.3
       r.lpush('blocking_queue', 'waiting_message')
@@ -676,13 +676,13 @@ describe "redis" do
     @r.blpop('blocking_queue', 0.1).should == ['blocking_queue', 'another_message']
     @r.blpop('blocking_queue', 0.1).should == ['blocking_queue', 'message']
     @r.blpop('blocking_queue', 0.4).should == ['blocking_queue', 'waiting_message']
-    Process.wait(pid)
+    t.join
   end
   
   it "should be able to block on the head of a list (BRPOP)" do
     @r.rpush('blocking_queue', 'message')
     @r.rpush('blocking_queue', 'another_message')
-    pid = Kernel.fork do
+    t = Thread.new do
       r = Redis.new(:db => 15)
       sleep 0.3
       r.rpush('blocking_queue', 'waiting_message')
@@ -690,7 +690,7 @@ describe "redis" do
     @r.brpop('blocking_queue', 0.1).should == ['blocking_queue', 'another_message']
     @r.brpop('blocking_queue', 0.1).should == ['blocking_queue', 'message']
     @r.brpop('blocking_queue', 0.4).should == ['blocking_queue', 'waiting_message']
-    Process.wait(pid)
+    t.join
   end
   
   it "should unset a configured timeout when using a blocking command" do
